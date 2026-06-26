@@ -1,0 +1,120 @@
+# Load necessary libraries
+library(readxl)
+library(dplyr)
+library(ggplot2)
+library(writexl)
+
+
+file_paths <- c(
+  ATF6 = "C:\\Users\\User\\Desktop\\Second manuscript\\Protein expression and analysis\\Tumour VS Normal (ATF6).xlsx",
+  ERN1 = "C:\\Users\\User\\Desktop\\Second manuscript\\Protein expression and analysis\\Tumour VS Normal (ERN1).xlsx",
+  PERK = "C:\\Users\\User\\Desktop\\Second manuscript\\Protein expression and analysis\\Tumour VS Normal (PERK).xlsx"
+)
+sheet_name <- "GBM"  # Only GBM sheet from each file
+
+
+results_list <- list()
+
+
+for (protein in names(file_paths)) {
+  file_path <- file_paths[protein]
+  
+
+  if (!file.exists(file_path)) {
+    warning(paste("File not found:", file_path, "Skipping..."))
+    next
+  }
+  
+  data <- read_excel(file_path, sheet = sheet_name)
+  
+
+  if (!all(c("Sample type", "nRPX") %in% colnames(data)) || 
+      !any(data$`Sample type` == "Normal") || 
+      !any(data$`Sample type` == "Tumor")) {
+    message(paste("Sheet", sheet_name, "in file", protein, "is missing necessary columns or groups. Skipping..."))
+    next
+  }
+  
+  t_test_result <- t.test(nRPX ~ `Sample type`, data = data)
+  results_list[[protein]] <- data.frame(
+    Protein = protein,
+    p_value = t_test_result$p.value,
+    t_statistic = t_test_result$statistic
+  )
+}
+
+
+if (length(results_list) > 0) {
+  results_df <- bind_rows(results_list) %>%
+    mutate(adjusted_p_value = p.adjust(p_value, method = "BH"))
+  print(results_df)
+  
+  output_file <- "C:\\Users\\User\\Desktop\\Second manuscript\\Protein expression and analysis\\UPR_protein_t_test_results.xlsx"
+  write_xlsx(results_df, output_file)
+  message("Results saved to:", output_file)
+} else {
+  message("No valid data found in any file.")
+}
+
+
+plot_data <- lapply(names(file_paths), function(protein) {
+  file_path <- file_paths[protein]
+  if (!file.exists(file_path)) return(NULL)
+  
+  data <- read_excel(file_path, sheet = sheet_name)
+  if (nrow(data) > 0 && "Sample type" %in% colnames(data) && "nRPX" %in% colnames(data)) {
+    data$Protein <- protein
+    return(data)
+  } else {
+    return(NULL)
+  }
+}) %>% bind_rows()
+
+
+plot_data <- left_join(plot_data, results_df, by = "Protein")
+
+
+if (nrow(plot_data) > 0) {
+  plot <- ggplot(plot_data, aes(x = Protein, y = nRPX, fill = `Sample type`)) +
+    geom_boxplot(outlier.shape = NA, width = 0.6, position = position_dodge(width = 0.75)) +
+    scale_fill_manual(values = c("Tumor" = "red", "Normal" = "blue")) +
+    theme_minimal() +
+    theme(panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.background = element_blank(),
+          axis.line = element_line(colour = "black", linewidth = 1.2),
+          axis.text.x = element_text(angle = 0, vjust = 0.5, hjust = 0.5, 
+                                     color = "black", family = "Arial", size = 19),
+          axis.text.y = element_text(color = "black", family = "Arial", size = 19),
+          axis.title.x = element_text(color = "black", family = "Arial", size = 19),
+          axis.title.y = element_text(color = "black", family = "Arial", size = 19),
+          axis.ticks.y = element_line(color = "black", linewidth = 1.2),
+          axis.ticks.length.y = unit(0.6, "cm"),
+          axis.ticks.x = element_line(color = "black", linewidth = 1.2),
+          axis.ticks.length.x = unit(0.6, "cm"),
+          legend.text = element_text(color = "black", family = "Arial", size = 19),
+          legend.title = element_text(color = "black", family = "Arial", size = 19),
+          legend.position = "bottom") +
+    labs(x = "Protein", y = "nRPX") +
+    scale_y_continuous(limits = c(-2, 6), breaks = seq(-2, 6, by = 2)) +
+    geom_hline(yintercept = 6.15, linetype = "dotted", color = "black", linewidth = 0.7)
+  
+
+  max_y <- max(plot_data$nRPX, na.rm = TRUE)
+  label_y <- max_y + 0.5
+  
+  protein_names <- names(file_paths)  # ATF6, ERN1, PERK
+  for (i in seq_along(protein_names)) {
+    protein <- protein_names[i]
+    adj_p <- format(results_df$p_value[results_df$Protein == protein], scientific = TRUE, digits = 2)
+    plot <- plot + 
+      annotate("text", x = protein, y = label_y, label = adj_p,
+               vjust = 0, hjust = 0.5, size = 7, color = "black", family = "Arial")
+  }
+  
+  plot_file <- "C:\\Users\\User\\Desktop\\Second manuscript\\Protein expression and analysis\\UPR_protein_box_plot.png"
+  ggsave(plot_file, plot = plot, width = 8, height = 8)
+  message("Box plot saved to:", plot_file)
+} else {
+  message("No data available for plotting.")
+}

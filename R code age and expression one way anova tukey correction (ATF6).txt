@@ -1,0 +1,257 @@
+# Load required libraries
+library(readxl)
+library(dplyr)
+library(ggplot2)
+library(writexl)
+library(scales)
+
+# ===== USER INPUT =====
+file_path <- "C:/Users/User/Desktop/Second manuscript/Demography/Demography UPR.xlsx"
+output_folder <- "C:/Users/User/Desktop/Second manuscript/Demography/ATF6_ANOVA_Tukey_Results"
+
+# Create output folder if needed
+if (!dir.exists(output_folder)) {
+  dir.create(output_folder, recursive = TRUE)
+}
+
+# Only process ATF6
+sheet_name <- "ATF6"
+
+# Age group breaks and labels
+age_breaks <- c(0, 30, 40, 50, 60, 70, 80, 101)
+age_labels <- c("0-29", "30-39", "40-49", "50-59", "60-69", "70-79", "80-100")
+
+# ===== READ AND CLEAN DATA =====
+message("=== Processing sheet: ", sheet_name, " ===")
+
+data <- read_excel(file_path, sheet = sheet_name)
+
+colnames(data) <- toupper(colnames(data))
+gene_col <- toupper(sheet_name)
+
+# Validate columns
+if (!all(c("AGE", gene_col) %in% colnames(data))) {
+  stop("Missing AGE or ", gene_col, " column in sheet ", sheet_name)
+}
+
+# Convert to numeric and remove NAs
+data <- data %>%
+  mutate(
+    AGE = as.numeric(AGE),
+    !!gene_col := as.numeric(.data[[gene_col]])
+  ) %>%
+  filter(!is.na(AGE) & !is.na(.data[[gene_col]]))
+
+if (nrow(data) == 0) {
+  stop("No valid rows after cleaning.")
+}
+
+# Create age groups
+data <- data %>%
+  mutate(
+    AGE_GROUP = cut(
+      AGE,
+      breaks = age_breaks,
+      labels = age_labels,
+      right = FALSE
+    )
+  ) %>%
+  filter(!is.na(AGE_GROUP))
+
+# Check sample size per group
+print(table(data$AGE_GROUP))
+
+# ===== ONE-WAY ANOVA =====
+formula <- as.formula(paste(gene_col, "~ AGE_GROUP"))
+aov_model <- aov(formula, data = data)
+
+anova_summary <- summary(aov_model)
+
+anova_df <- as.data.frame(anova_summary[[1]])
+anova_df$Factor <- rownames(anova_df)
+
+rownames(anova_df) <- NULL
+
+anova_df <- anova_df[, c("Factor", "Df", "Sum Sq", "Mean Sq", "F value", "Pr(>F)")]
+
+colnames(anova_df) <- c(
+  "Factor",
+  "df",
+  "Sum_Sq",
+  "Mean_Sq",
+  "F_value",
+  "p_value"
+)
+
+anova_df$Sheet <- sheet_name
+
+message("ANOVA p-value: ", anova_df$p_value[1])
+
+# ===== TUKEY HSD =====
+tukey_result <- TukeyHSD(aov_model, "AGE_GROUP")
+
+tukey_df <- as.data.frame(tukey_result$AGE_GROUP)
+
+tukey_df$Comparison <- rownames(tukey_df)
+
+rownames(tukey_df) <- NULL
+
+# Since expression is already Log2(RSEM+1),
+# Tukey difference is already LogFC
+tukey_df$LogFC <- tukey_df$diff
+
+tukey_df <- tukey_df %>%
+  rename(
+    Diff = diff,
+    Lower_CI = lwr,
+    Upper_CI = upr,
+    P.adj = `p adj`
+  )
+
+tukey_df <- tukey_df %>%
+  select(
+    Comparison,
+    Diff,
+    Lower_CI,
+    Upper_CI,
+    P.adj,
+    LogFC
+  )
+
+tukey_df$Sheet <- sheet_name
+
+# ===== SAVE RESULTS =====
+all_results <- list(
+  "ATF6_ANOVA" = anova_df,
+  "ATF6_Tukey" = tukey_df
+)
+
+output_file <- file.path(
+  output_folder,
+  "ATF6_ANOVA_Tukey_Results.xlsx"
+)
+
+write_xlsx(
+  all_results,
+  path = output_file
+)
+
+message("Results saved to: ", output_file)
+
+# ===== BOXPLOT =====
+y_min <- floor(min(data[[gene_col]], na.rm = TRUE) - 0.5)
+y_max <- ceiling(max(data[[gene_col]], na.rm = TRUE) + 1)
+
+y_limits <- c(y_min, y_max)
+
+p <- ggplot(
+  data,
+  aes(
+    x = AGE_GROUP,
+    y = .data[[gene_col]]
+  )
+) +
+  geom_boxplot(
+    fill = NA,
+    color = "black",
+    linewidth = 1.2,
+    width = 0.5
+  ) +
+  stat_summary(
+    fun.data = function(y) {
+      data.frame(
+        y = max(y, na.rm = TRUE) + 0.2,
+        label = paste0("n=", length(y))
+      )
+    },
+    geom = "text",
+    size = 8,
+    color = "black"
+  ) +
+  labs(
+    x = "Age Group",
+    y = bquote(italic(.(gene_col)) ~ "Log"[2] ~ "(RSEM+1)"),
+    title = paste(
+      sheet_name,
+      ": Expression by Age Group"
+    )
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(
+      angle = 0,
+      hjust = 0.5,
+      family = "sans",
+      size = 22,
+      color = "black"
+    ),
+    axis.text.y = element_text(
+      family = "sans",
+      size = 22,
+      color = "black"
+    ),
+    axis.title.x = element_text(
+      family = "sans",
+      size = 22,
+      color = "black"
+    ),
+    axis.title.y = element_text(
+      family = "sans",
+      size = 22,
+      color = "black"
+    ),
+    plot.title = element_text(
+      family = "sans",
+      size = 17,
+      hjust = 0.5
+    ),
+    axis.line = element_line(
+      color = "black",
+      linewidth = 1.2
+    ),
+    panel.grid = element_blank(),
+    axis.ticks = element_line(
+      color = "black",
+      linewidth = 1.1
+    ),
+    axis.ticks.length = unit(0.6, "cm")
+  ) +
+  scale_y_continuous(
+    limits = y_limits,
+    breaks = seq(
+      y_limits[1],
+      y_limits[2],
+      by = 2
+    ),
+    labels = scales::number_format(
+      accuracy = 0.1
+    )
+  ) +
+  coord_cartesian(clip = "off")
+
+print(p)
+
+plot_file <- file.path(
+  output_folder,
+  paste0(sheet_name, "_Boxplot.png")
+)
+
+ggsave(
+  plot_file,
+  plot = p,
+  width = 8,
+  height = 6,
+  dpi = 300
+)
+
+message("Boxplot saved to: ", plot_file)
+
+# Verify output
+print(head(tukey_df))
+print(names(tukey_df))
+
+# Show ANOVA table
+print(anova_df)
+
+# Show traceback if an error occurs
+traceback()

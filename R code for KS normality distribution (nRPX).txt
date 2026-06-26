@@ -1,0 +1,109 @@
+
+library(readxl)
+library(dplyr)
+
+
+file_paths <- c(
+  ATF6 = "C:/Users/User/Desktop/Second manuscript/Protein expression and analysis/Tumour VS Normal (ATF6).xlsx",
+  ERN1 = "C:/Users/User/Desktop/Second manuscript/Protein expression and analysis/Tumour VS Normal (ERN1).xlsx",
+  PERK = "C:/Users/User/Desktop/Second manuscript/Protein expression and analysis/Tumour VS Normal (PERK).xlsx"
+)
+
+sheet_name <- "GBM"
+output_folder <- dirname(file_paths[1])
+
+col_sample_id   <- "Sample ID"
+col_sample_type <- "Sample type"
+col_nrpx        <- "nRPX"
+
+tumor_label <- "Tumor"   # change to "Tumour" if needed
+
+
+read_protein_data <- function(file_path, protein_name) {
+
+  read_excel(file_path, sheet = sheet_name) %>%
+    select(
+      Sample_ID = !!sym(col_sample_id),
+      Sample_type = !!sym(col_sample_type),
+      nRPX = !!sym(col_nrpx)
+    ) %>%
+    mutate(Protein = protein_name)
+}
+
+
+data_ATF6 <- read_protein_data(file_paths["ATF6"], "ATF6")
+data_ERN1 <- read_protein_data(file_paths["ERN1"], "ERN1")
+data_PERK <- read_protein_data(file_paths["PERK"], "PERK")
+
+
+tumor_ATF6 <- data_ATF6 %>%
+  filter(Sample_type == tumor_label) %>%
+  select(Sample_ID, nRPX_ATF6 = nRPX)
+
+tumor_ERN1 <- data_ERN1 %>%
+  filter(Sample_type == tumor_label) %>%
+  select(Sample_ID, nRPX_ERN1 = nRPX)
+
+tumor_PERK <- data_PERK %>%
+  filter(Sample_type == tumor_label) %>%
+  select(Sample_ID, nRPX_PERK = nRPX)
+
+
+merged_data <- tumor_ATF6 %>%
+  inner_join(tumor_ERN1, by = "Sample_ID") %>%
+  inner_join(tumor_PERK, by = "Sample_ID")
+
+cat("Number of samples:", nrow(merged_data), "\n")
+
+# ============================================================
+# Kolmogorov-Smirnov Test
+# ============================================================
+
+variables <- c("nRPX_ATF6", "nRPX_ERN1", "nRPX_PERK")
+
+results_text <- c(
+  "==========================================",
+  "Kolmogorov-Smirnov Normality Test Results",
+  "==========================================",
+  ""
+)
+
+for (var in variables) {
+
+  x <- na.omit(merged_data[[var]])
+
+  ks_result <- ks.test(
+    x,
+    "pnorm",
+    mean = mean(x),
+    sd = sd(x)
+  )
+
+  conclusion <- ifelse(
+    ks_result$p.value > 0.05,
+    "Normally distributed",
+    "Not normally distributed"
+  )
+
+  result_block <- c(
+    paste0("Variable: ", var),
+    paste0("KS statistic (D): ", round(ks_result$statistic, 4)),
+    paste0("P-value: ", signif(ks_result$p.value, 4)),
+    paste0("Conclusion: ", conclusion),
+    "------------------------------------------"
+  )
+
+  results_text <- c(results_text, result_block)
+
+  cat("\n")
+  cat(paste(result_block, collapse = "\n"))
+  cat("\n")
+}
+
+
+output_file <- file.path(output_folder, "KS_normality_results.txt")
+
+writeLines(results_text, output_file)
+
+cat("\nResults saved to:\n")
+cat(output_file, "\n")

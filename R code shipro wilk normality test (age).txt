@@ -1,0 +1,83 @@
+library(readxl)
+library(dplyr)
+library(writexl)
+
+# ====== FILE PATHS (adjust these if needed) ======
+file_path <- "C:/Users/User/Desktop/Second manuscript/Demography/Demography UPR.xlsx"
+output_folder <- C:/Users/User/Desktop/Second manuscript/Demography/AgeGroup_Normality"
+
+# Create output folder if it doesn't exist
+if (!dir.exists(output_folder)) {
+  dir.create(output_folder, recursive = TRUE)
+}
+
+# ====== SHEETS AND GENE COLUMN MAPPING ======
+sheet_names <- c("EIF2AK3", "ATF6", "ERN1")   # gene column = sheet name
+
+all_results <- data.frame()
+
+# ====== PROCESS EACH SHEET ======
+for (sheet_name in sheet_names) {
+  cat("\n--- Processing:", sheet_name, "---\n")
+  
+  data <- read_excel(file_path, sheet = sheet_name)
+  
+  # Standardise column names to uppercase
+  colnames(data) <- toupper(colnames(data))
+  gene_col <- toupper(sheet_name)   # e.g., "EIF2AK3", "ATF6", "ERN1"
+  
+  # Check required columns exist
+  if (!all(c("AGE", gene_col) %in% colnames(data))) {
+    cat("  Skipping:", sheet_name, "- missing AGE or", gene_col, "\n")
+    next
+  }
+  
+  # Convert to numeric and remove missing values
+  data$AGE <- as.numeric(data$AGE)
+  data[[gene_col]] <- as.numeric(data[[gene_col]])
+  data <- data %>% filter(!is.na(AGE) & !is.na(.data[[gene_col]]))
+  
+  if (nrow(data) == 0) {
+    cat("  Skipping:", sheet_name, "- no valid rows after removing NAs\n")
+    next
+  }
+  
+  # ----- CREATE AGE GROUPS (your specification) -----
+  data$AGE_GROUP <- cut(data$AGE,
+                        breaks = c(0, 30, 40, 50, 60, 70, 80, 101),
+                        labels = c("0-29", "30-39", "40-49", "50-59",
+                                   "60-69", "70-79", "80-100"),
+                        right = FALSE)   # [0,30), [30,40), ...
+  
+  cat("  Age group counts:\n")
+  print(table(data$AGE_GROUP, useNA = "ifany"))
+  
+  # ----- SHAPIRO-WILK TEST PER AGE GROUP -----
+  for (age_group in unique(data$AGE_GROUP)) {
+    if (is.na(age_group)) next   # skip if any NA group appears
+    
+    group_data <- data %>% filter(AGE_GROUP == age_group)
+    n <- nrow(group_data)
+    
+    if (n >= 3) {
+      test_result <- shapiro.test(group_data[[gene_col]])
+      all_results <- rbind(all_results, data.frame(
+        Sheet = sheet_name,
+        Age_Group = as.character(age_group),
+        N = n,
+        W = test_result$statistic,
+        P_Value = test_result$p.value
+      ))
+      cat("  ✓ Test done for", age_group, "(n =", n, ")\n")
+    } else {
+      cat("  Skipping", age_group, "- only", n, "samples (<3)\n")
+    }
+  }
+}
+
+# ====== SAVE RESULTS ======
+output_file <- file.path(output_folder, "AgeGroup_Normality_Results.xlsx")
+write_xlsx(all_results, output_file)
+
+cat("\n Results saved to:", output_file, "\n")
+cat("Total rows:", nrow(all_results), "\n")

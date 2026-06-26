@@ -1,0 +1,122 @@
+
+
+library(readxl)
+library(car)
+library(dplyr)
+
+input_dir <- "C:/Users/User/Desktop/cleaned data and R codes/Processed data/cell line data"
+file_path <- file.path(input_dir, "UPR Demography.xlsx")
+output_dir <- file.path(input_dir, "ancova second manuscript")
+
+if (!dir.exists(output_dir)) dir.create(output_dir)
+
+sheets <- c("ERN1", "ATF6", "EIF2AK3")
+
+run_ancova <- function(sheet_name) {
+  cat("\n", paste(rep("=", 90), collapse = ""), "\n")
+  cat("Processing sheet:", sheet_name, "\n")
+  cat(paste(rep("=", 90), collapse = ""), "\n")
+  
+
+  df <- read_excel(file_path, sheet = sheet_name)
+  
+
+  required_cols <- c("Expression", "Age", "Gender")
+  if (!all(required_cols %in% names(df))) {
+    stop("Sheet ", sheet_name, " missing one of: ", paste(required_cols, collapse = ", "))
+  }
+  
+ 
+  df$Gender <- factor(df$Gender)
+  df$Age <- as.numeric(df$Age)
+  df$Expression <- as.numeric(df$Expression)
+  
+
+  df <- df[complete.cases(df[, c("Expression", "Age", "Gender")]), ]
+  
+  cat("After removing missing values, N =", nrow(df), "\n")
+  
+
+  model <- lm(Expression ~ Gender + Age + Gender:Age, data = df)
+  
+ 
+  anova_result <- Anova(model, type = "II")
+  
+
+  gender_ss <- anova_result["Gender", "Sum Sq"]
+  gender_df <- anova_result["Gender", "Df"]
+  gender_ms <- gender_ss / gender_df
+  gender_f <- anova_result["Gender", "F value"]
+  gender_p <- anova_result["Gender", "Pr(>F)"]
+  
+  age_ss <- anova_result["Age", "Sum Sq"]
+  age_df <- anova_result["Age", "Df"]
+  age_ms <- age_ss / age_df
+  age_f <- anova_result["Age", "F value"]
+  age_p <- anova_result["Age", "Pr(>F)"]
+  
+ 
+  if("Gender:Age" %in% rownames(anova_result)) {
+    int_ss <- anova_result["Gender:Age", "Sum Sq"]
+    int_df <- anova_result["Gender:Age", "Df"]
+    int_ms <- int_ss / int_df
+    int_f <- anova_result["Gender:Age", "F value"]
+    int_p <- anova_result["Gender:Age", "Pr(>F)"]
+  } else if("Age:Gender" %in% rownames(anova_result)) {
+    int_ss <- anova_result["Age:Gender", "Sum Sq"]
+    int_df <- anova_result["Age:Gender", "Df"]
+    int_ms <- int_ss / int_df
+    int_f <- anova_result["Age:Gender", "F value"]
+    int_p <- anova_result["Age:Gender", "Pr(>F)"]
+  } else {
+    int_ss <- NA; int_df <- NA; int_ms <- NA; int_f <- NA; int_p <- NA
+  }
+  
+
+  error_ss <- anova_result["Residuals", "Sum Sq"]
+  error_df <- anova_result["Residuals", "Df"]
+  error_ms <- error_ss / error_df
+  
+  total_ss <- sum(anova_result[, "Sum Sq"])
+  total_df <- sum(anova_result[, "Df"])   # No +1 here, because sum already includes Residuals df
+  
+ 
+  cat("\nANCOVA Table (Type II SS)\n")
+  cat(sprintf("%-20s %-15s %-8s %-15s %-10s %-10s\n", 
+              "Source", "Sum Sq", "df", "Mean Sq", "F", "p"))
+  cat(paste(rep("-", 90), collapse = ""), "\n")
+  cat(sprintf("%-20s %-15.2f %-8d %-15.2f %-10.2f %-10.4f\n", 
+              "Gender", gender_ss, gender_df, gender_ms, gender_f, gender_p))
+  cat(sprintf("%-20s %-15.2f %-8d %-15.2f %-10.2f %-10.4f\n", 
+              "Age", age_ss, age_df, age_ms, age_f, age_p))
+  cat(sprintf("%-20s %-15.2f %-8d %-15.2f %-10.2f %-10.4f\n", 
+              "Gender:Age", int_ss, int_df, int_ms, int_f, int_p))
+  cat(sprintf("%-20s %-15.2f %-8d %-15.2f\n", 
+              "Residuals", error_ss, error_df, error_ms))
+  cat(sprintf("%-20s %-15.2f %-8d\n", 
+              "Total", total_ss, total_df))
+  cat("\nSignif. codes: 0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1\n")
+  
+  
+  table_result <- data.frame(
+    Source = c("Gender", "Age", "Gender:Age", "Residuals", "Total"),
+    Sum_Squares = c(gender_ss, age_ss, int_ss, error_ss, total_ss),
+    df = c(gender_df, age_df, int_df, error_df, total_df),
+    Mean_Square = c(gender_ms, age_ms, int_ms, error_ms, NA),
+    F = c(gender_f, age_f, int_f, NA, NA),
+    p = c(gender_p, age_p, int_p, NA, NA)
+  )
+  
+  out_file <- file.path(output_dir, paste0("ANCOVA_", sheet_name, ".csv"))
+  write.csv(table_result, out_file, row.names = FALSE)
+  cat("\n✅ Results saved to:", out_file, "\n")
+}
+
+# Run for each sheet
+for (s in sheets) {
+  run_ancova(s)
+}
+
+cat("\n", paste(rep("=", 90), collapse = ""), "\n")
+cat("All ANCOVA analyses completed. Output folder:", output_dir, "\n")
+cat(paste(rep("=", 90), collapse = ""), "\n")

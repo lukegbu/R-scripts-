@@ -1,0 +1,137 @@
+
+
+library(readxl)
+library(dplyr)
+library(ggplot2)
+
+file_paths <- c(
+  ATF6 = "C:/Users/User/Desktop/Second manuscript/Protein expression and analysis/Tumour VS Normal (ATF6).xlsx",
+  ERN1 = "C:/Users/User/Desktop/Second manuscript/Protein expression and analysis/Tumour VS Normal (ERN1).xlsx",
+  PERK = "C:/Users/User/Desktop/Second manuscript/Protein expression and analysis/Tumour VS Normal (PERK).xlsx"
+)
+
+sheet_name <- "GBM"
+output_folder <- dirname(file_paths[1])
+
+col_sample_id   <- "Sample ID"
+col_sample_type <- "Sample type"
+col_nrpx        <- "nRPX"
+tumor_label     <- "Tumor"
+
+read_protein_data <- function(file_path, protein_name) {
+  read_excel(file_path, sheet = sheet_name) %>%
+    select(Sample_ID = !!sym(col_sample_id),
+           Sample_type = !!sym(col_sample_type),
+           nRPX = !!sym(col_nrpx)) %>%
+    mutate(Protein = protein_name)
+}
+
+
+data_ATF6 <- read_protein_data(file_paths["ATF6"], "ATF6")
+data_ERN1 <- read_protein_data(file_paths["ERN1"], "ERN1")
+data_PERK <- read_protein_data(file_paths["PERK"], "PERK")
+
+
+tumor_ATF6 <- data_ATF6 %>% filter(Sample_type == tumor_label) %>% select(Sample_ID, nRPX_ATF6 = nRPX)
+tumor_ERN1 <- data_ERN1 %>% filter(Sample_type == tumor_label) %>% select(Sample_ID, nRPX_ERN1 = nRPX)
+tumor_PERK <- data_PERK %>% filter(Sample_type == tumor_label) %>% select(Sample_ID, nRPX_PERK = nRPX)
+
+
+merged_data <- tumor_ATF6 %>%
+  inner_join(tumor_ERN1, by = "Sample_ID") %>%
+  inner_join(tumor_PERK, by = "Sample_ID")
+
+
+plot_correlation <- function(data, x_col, y_col, x_name, y_name, output_file) {
+  
+  x <- data[[x_col]]
+  y <- data[[y_col]]
+  
+
+  pearson <- cor.test(x, y, method = "pearson")
+  fit <- lm(y ~ x)
+  
+ 
+  pearson_label <- paste0(
+    "Pearson r = ", round(pearson$estimate, 2),
+    "\np = ", formatC(pearson$p.value, format = "e", digits = 2)
+  )
+  
+  eq_label <- paste0(
+    "y = ",
+    round(coef(fit)[2], 2),
+    "x + ",
+    round(coef(fit)[1], 2)
+  )
+  
+  r2_label <- paste0(
+    "R² = ",
+    round(summary(fit)$r.squared, 2)
+  )
+  
+  stats_label <- paste(
+    pearson_label,
+    eq_label,
+    r2_label,
+    sep = "\n"
+  )
+  
+
+  p <- ggplot(data, aes(x = !!sym(x_col), y = !!sym(y_col))) +
+    
+
+    geom_point(color = "#1f78b4", size = 2.2) +
+    
+
+    geom_smooth(method = "lm", se = FALSE, color = "#e31a1c", size = 1) +
+    
+
+    labs(
+      title = paste(x_name, "vs.", y_name),
+      x = paste("mRNA Expression,", x_name, "(log2)"),
+      y = paste("mRNA Expression,", y_name, "(log2)")
+    ) +
+    
+
+    theme_classic(base_size = 12) +
+    theme(
+      plot.title = element_text(hjust = 0.5, face = "bold"),
+      axis.line = element_line(color = "black"),
+      axis.text = element_text(color = "black"),
+      axis.title = element_text(face = "plain")
+    ) +
+    
+ 
+    annotate(
+      "text",
+      x = Inf,
+      y = -Inf,
+      label = stats_label,
+      hjust = 1.05,
+      vjust = -0.1,
+      size = 3.5
+    )
+  
+
+  ggsave(output_file, plot = p, width = 5.5, height = 4.5, dpi = 300)
+  
+  print(p)
+}
+
+
+pairs <- list(c("ATF6","ERN1"), c("ATF6","PERK"), c("ERN1","PERK"))
+
+for (pair in pairs) {
+  prot1 <- pair[1]
+  prot2 <- pair[2]
+  
+  x_col <- paste0("nRPX_", prot1)
+  y_col <- paste0("nRPX_", prot2)
+  
+  out_file <- file.path(
+    output_folder,
+    paste0("scatter_", prot1, "_vs_", prot2, ".png")
+  )
+  
+  plot_correlation(merged_data, x_col, y_col, prot1, prot2, out_file)
+}

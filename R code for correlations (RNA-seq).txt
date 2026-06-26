@@ -1,0 +1,159 @@
+
+
+library(readxl)
+library(dplyr)
+library(ggplot2)
+library(rlang)
+
+
+file_paths <- c(
+  ATF6 = "C:/Users/User/Desktop/Second manuscript/RNA-seq analysis and data/Tumour VS Normal (ATF6).xlsx",
+  ERN1 = "C:/Users/User/Desktop/Second manuscript/RNA-seq analysis and data/Tumour VS Normal (ERN1).xlsx",
+  PERK = "C:/Users/User/Desktop/Second manuscript/RNA-seq analysis and data/Tumour VS Normal (PERK).xlsx"
+)
+
+sheet_name <- "GBM"
+output_folder <- dirname(file_paths[1])
+if (!dir.exists(output_folder)) dir.create(output_folder, recursive = TRUE)
+
+col_sample_id   <- "Sample ID"
+col_sample_type <- "Sample type"
+col_nrpx        <- "expression_value"   # column name in Excel
+tumor_label     <- "Tumor"
+
+
+apply_log2 <- TRUE
+
+
+read_protein_data <- function(file_path, protein_name) {
+  df <- read_excel(file_path, sheet = sheet_name) %>%
+    select(
+      Sample_ID = !!sym(col_sample_id),
+      Sample_type = !!sym(col_sample_type),
+      expression_value = !!sym(col_nrpx)
+    ) %>%
+    mutate(Protein = protein_name)
+  
+  if (apply_log2) {
+    df <- df %>% mutate(expression_value = log2(expression_value + 1))
+  }
+  return(df)
+}
+
+
+data_ATF6 <- read_protein_data(file_paths["ATF6"], "ATF6")
+data_ERN1 <- read_protein_data(file_paths["ERN1"], "ERN1")
+data_PERK <- read_protein_data(file_paths["PERK"], "PERK")
+
+
+tumor_ATF6 <- data_ATF6 %>% 
+  filter(Sample_type == tumor_label) %>% 
+  select(Sample_ID, expression_value_ATF6 = expression_value)
+
+tumor_ERN1 <- data_ERN1 %>% 
+  filter(Sample_type == tumor_label) %>% 
+  select(Sample_ID, expression_value_ERN1 = expression_value)
+
+tumor_PERK <- data_PERK %>% 
+  filter(Sample_type == tumor_label) %>% 
+  select(Sample_ID, expression_value_PERK = expression_value)
+
+
+merged_data <- tumor_ATF6 %>%
+  inner_join(tumor_ERN1, by = "Sample_ID") %>%
+  inner_join(tumor_PERK, by = "Sample_ID")
+
+
+plot_correlation <- function(data, x_col, y_col, x_name, y_name, output_file) {
+  
+  x <- data[[x_col]]
+  y <- data[[y_col]]
+  valid <- complete.cases(x, y)
+  x <- x[valid]
+  y <- y[valid]
+  
+  if (length(x) < 3) {
+    warning(paste("Not enough valid observations for", x_name, "vs", y_name, "- skipping"))
+    return(NULL)
+  }
+  
+ 
+  pearson <- cor.test(x, y, method = "pearson")
+  fit <- lm(y ~ x)
+  
+ 
+  transform_label <- if (apply_log2) "log2" else "raw"
+  
+  pearson_label <- paste0(
+    "Pearson: ", round(pearson$estimate, 3),
+    "\n(p = ", formatC(pearson$p.value, format = "e", digits = 2), ")"
+  )
+  eq_label <- paste0(
+    "y = ", round(coef(fit)[2], 3),
+    "x + ", round(coef(fit)[1], 3)
+  )
+  r2_label <- paste0(
+    "R² = ", round(summary(fit)$r.squared, 3)
+  )
+  
+  # ---- Positions for bottom-right corner ----
+  x_range <- diff(range(x, na.rm = TRUE))
+  y_range <- diff(range(y, na.rm = TRUE))
+  
+  # Anchor near bottom-right, with small margin
+  x_pos <- max(x, na.rm = TRUE) - 0.02 * x_range
+  y_pos <- min(y, na.rm = TRUE) + 0.02 * y_range
+  
+  # Vertical spacing between lines (as fraction of y_range)
+  v_step <- 0.08 * y_range
+  
+  # ---- Build plot ----
+  p <- ggplot(data, aes(x = !!sym(x_col), y = !!sym(y_col))) +
+    
+    geom_point(color = "#1f78b4", size = 2.2, na.rm = TRUE) +
+    geom_smooth(method = "lm", se = FALSE, color = "#e31a1c", size = 1, na.rm = TRUE) +
+    
+    labs(
+      title = paste(x_name, "vs.", y_name),
+      x = paste("mRNA Expression,", x_name, "(", transform_label, ")"),
+      y = paste("mRNA Expression,", y_name, "(", transform_label, ")")
+    ) +
+    
+    theme_classic(base_size = 12) +
+    theme(
+      plot.title = element_text(hjust = 0.5, face = "bold"),
+      axis.line = element_line(color = "black"),
+      axis.text = element_text(color = "black"),
+      axis.title = element_text(face = "plain")
+    ) +
+    
+    # Annotations in bottom-right, stacked upward
+    annotate("text", x = x_pos, y = y_pos, 
+             label = pearson_label, hjust = 1, vjust = 0, size = 3.5) +
+    annotate("text", x = x_pos, y = y_pos + v_step, 
+             label = eq_label, hjust = 1, vjust = 0, size = 3.5) +
+    annotate("text", x = x_pos, y = y_pos + 2 * v_step, 
+             label = r2_label, hjust = 1, vjust = 0, size = 3.5)
+  
+  ggsave(output_file, plot = p, width = 5.5, height = 4.5, dpi = 600)
+  print(p)
+}
+
+
+pairs <- list(
+  c("ATF6", "ERN1"),
+  c("ATF6", "PERK"),
+  c("ERN1", "PERK")
+)
+
+for (pair in pairs) {
+  prot1 <- pair[1]
+  prot2 <- pair[2]
+  x_col <- paste0("expression_value_", prot1)
+  y_col <- paste0("expression_value_", prot2)
+  out_file <- file.path(output_folder,
+                        paste0("scatter_", prot1, "_vs_", prot2, ".png"))
+  plot_correlation(merged_data, x_col, y_col, prot1, prot2, out_file)
+}
+
+cat("\nAll plots saved to:", output_folder, "\n")

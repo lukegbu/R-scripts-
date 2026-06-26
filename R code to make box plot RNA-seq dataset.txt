@@ -1,0 +1,139 @@
+
+library(readxl)
+library(ggplot2)
+library(dplyr)
+library(writexl)
+
+
+file_path <- "C:\\Users\\User\\Desktop\\Second manuscript\\RNA-seq analysis and data\\Tumour VS Normal (UPR).xlsx"
+
+
+sheet_names <- excel_sheets(file_path)
+
+
+t_test_results <- list()
+
+
+combined_data <- data.frame()
+
+
+p_values <- c()  # Store raw p-values for Benjamini-Hochberg correction
+for (sheet in sheet_names) {
+  
+
+  data <- read_excel(file_path, sheet = sheet) %>%
+    select(Sample, patientID, expression_value)
+  
+
+  if ("expression_value" %in% colnames(data)) {
+    # Filter out any rows with missing expression values
+    data <- data %>%
+      filter(!is.na(expression_value))
+    
+
+    data <- data %>%
+      mutate(expression_value = log2(expression_value + 1))
+    
+
+    data <- data %>%
+      mutate(Primary_Tumor = sheet)
+    
+
+    t_test_result <- t.test(expression_value ~ Sample, data = data)
+    
+
+    p_values <- c(p_values, t_test_result$p.value)
+    
+
+    t_test_results[[sheet]] <- list(
+      "T-statistic" = t_test_result$statistic,
+      "P-value" = t_test_result$p.value,
+      "Mean (Control)" = t_test_result$estimate[1],
+      "Mean (Tumour)" = t_test_result$estimate[2]
+    )
+    
+   
+    combined_data <- rbind(combined_data, data)
+  } else {
+    print(paste("Skipping sheet:", sheet, "- 'expression_value' column not found"))
+  }
+}
+
+
+p_values_corrected <- p.adjust(p_values, method = "BH")
+
+
+plot <- ggplot(combined_data, aes(x = Primary_Tumor, y = expression_value, fill = Sample)) +
+  geom_boxplot(outlier.shape = NA, width = 0.5, position = position_dodge(width = 0.75)) +
+  scale_fill_manual(values = c("Tumour" = "red", "Control" = "blue")) +
+  theme_minimal() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.background = element_blank(),
+    axis.line = element_line(colour = "black", size = 1.0),
+    
+ 
+    axis.text.x = element_text(angle = 0, vjust = 0.5, hjust = 0.5,
+                                color = "black", family = "Arial", size = 19.2),
+    
+    axis.text.y = element_text(color = "black", family = "Arial", size = 19.2),
+    axis.title.x = element_text(color = "black", family = "Arial", size = 19.2),
+    axis.title.y = element_text(color = "black", family = "Arial", size = 19.2),
+    
+    axis.ticks.y = element_line(color = "black", size = 1.2),
+    axis.ticks.length.y = unit(0.6, "cm"),
+    axis.ticks.x = element_line(color = "black", size = 1.2),
+    axis.ticks.length.x = unit(0.6, "cm"),
+    
+    legend.text = element_text(color = "black", family = "Arial", size = 15),
+    legend.title = element_text(color = "black", family = "Arial", size = 15),
+    
+ 
+    legend.position = "bottom"
+  ) +
+  labs(x = "Primary Tumor",
+       y = expression(italic(EIF2AK3)~"Log2(RSEM+1)")) +
+  ylim(0, NA)
+
+
+label_y_position <- 7.5
+
+
+p_value_labels <- data.frame(
+  Primary_Tumor = names(t_test_results),
+  P_value = unlist(lapply(t_test_results, function(x) x$`P-value`)),
+  Adjusted_P_value = p_values_corrected
+)
+
+
+for (i in 1:nrow(p_value_labels)) {
+  tumor_type <- p_value_labels$Primary_Tumor[i]
+  p_value <- format(p_value_labels$Adjusted_P_value[i], scientific = TRUE, digits = 2)
+  
+  plot <- plot + 
+    annotate("text",
+             x = tumor_type,
+             y = label_y_position,
+             label = p_value,
+             vjust = 0,
+             hjust = 0.5,
+             size = 7.1,
+             angle = 0,   # CHANGED to horizontal
+             color = "black",
+             family = "Arial")
+}
+
+
+output_plot_path <- paste0("C:\\Users\\User\\Desktop\\Second manuscript\\RNA-seq analysis and data\\ERstress_combined_box_plot_with_p_values_and_control_legend.jpg")
+ggsave(output_plot_path, plot, device = "jpeg", width = 17, height = 8)
+
+
+t_test_results_df <- bind_rows(t_test_results, .id = "Sheet")
+t_test_results_df$`Adjusted P-value` <- p_values_corrected
+
+output_excel_path <- paste0("C:\\Users\\User\\Desktop\\Second manuscript\\RNA-seq analysis and data\\ERstress_T_test_results_with_adjusted_pvalues.xlsx")
+write_xlsx(t_test_results_df, output_excel_path)
+
+print("Combined box plot with p-values and control legend saved.")
+print("T-test results with Benjamini-Hochberg correction saved to Excel.")

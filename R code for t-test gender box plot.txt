@@ -1,0 +1,128 @@
+# Load necessary libraries
+library(readxl)
+library(dplyr)
+library(ggplot2)
+library(writexl)
+
+# Define the file path and output folder
+file_path <- "C:/Users/User/Desktop/cleaned data and R codes/Processed data/cell line data/Demography.xlsx"
+output_folder <- "C:/Users/User/Desktop/cleaned data and R codes/Processed data/cell line data/T-test_separated_box_plots"
+
+# Create output folder if it doesn't exist
+if (!dir.exists(output_folder)) {
+  dir.create(output_folder, recursive = TRUE)
+}
+
+# Specify ALL sheet names (including ACC)
+sheet_names <- c("ACC", "CHOL", "GBM", "LGG", "LIHC", "LUSC", "LUAD", "STAD", "SKCM", 
+                "THYM", "PRAD", "READ", "TGCT", "BRCA", "UCEC",
+                "PCPG", "PAAD", "COAD", "THCA")
+
+# Initialize a list to store all T-test results
+all_results <- list()
+
+# Corrected function to create boxplots (fixed NA handling and syntax)
+create_boxplot <- function(data, sheet_name) {
+  ggplot(data, aes(x = GENDER, y = EIF2AK3)) +
+    geom_boxplot(fill = NA, color = "black", size = 1.2, width = 0.5, na.rm = TRUE) +
+    stat_summary(
+      fun.data = function(y) {
+        data.frame(
+          y = max(y, na.rm = TRUE) + 0.1 * diff(range(y, na.rm = TRUE)),
+          label = paste0("n=", sum(!is.na(y)))
+        )
+      },
+      geom = "text", 
+      vjust = -0.5, 
+      size = 5, 
+      color = "black",
+      na.rm = TRUE
+    ) +
+    labs(
+      x = "Gender", 
+      y = expression(italic(EIF2AK3) ~ "Log"["2"](RSEM+1)),
+      title = paste(sheet_name, ": EIF2AK3 Expression by Gender")
+    ) +
+    scale_y_continuous(limits = c(-2, 12), breaks = seq(-2, 12, by = 2)) +
+    theme_minimal() +
+    theme(
+      axis.text.x = element_text(size = 22, color = "black"),
+      axis.text.y = element_text(size = 22, color = "black"),
+      axis.title.x = element_text(size = 22, color = "black"),
+      axis.title.y = element_text(size = 22, color = "black"),
+      plot.title = element_text(size = 17, hjust = 0.5),
+      axis.line = element_line(color = "black", size = 1.2),
+      panel.grid = element_blank(),
+      axis.ticks = element_line(color = "black", size = 1.1),
+      axis.ticks.length = unit(0.6, "cm")
+    )
+}
+
+# Process each sheet individually
+for (sheet_name in sheet_names) {
+  tryCatch({
+    # Read and clean data
+    data <- read_excel(file_path, sheet = sheet_name) %>%
+      select(any_of(c("GENDER", "EIF2AK3"))) %>%
+      rename_with(toupper) %>%
+      filter(!is.na(GENDER) & !is.na(EIF2AK3)) %>%
+      mutate(GENDER = toupper(GENDER)) %>%
+      filter(GENDER %in% c("MALE", "FEMALE"))
+    
+    # Skip if insufficient data
+    gender_counts <- table(data$GENDER)
+    if (length(gender_counts) < 2 || any(gender_counts < 2)) {
+      message(paste("Skipping", sheet_name, "- insufficient gender groups"))
+      all_results[[sheet_name]] <- data.frame(
+        Cancer_Type = sheet_name,
+        Status = "Insufficient gender groups"
+      )
+      next
+    }
+    
+    # Perform T-test
+    t_test_result <- t.test(EIF2AK3 ~ GENDER, data = data)
+    
+    # Store results
+    all_results[[sheet_name]] <- data.frame(
+      Cancer_Type = sheet_name,
+      Statistic = t_test_result$statistic,
+      df = t_test_result$parameter,
+      p.value = t_test_result$p.value,
+      Male_Mean = mean(data$EIF2AK3[data$GENDER == "MALE"], na.rm = TRUE),
+      Female_Mean = mean(data$EIF2AK3[data$GENDER == "FEMALE"], na.rm = TRUE),
+      Male_n = sum(data$GENDER == "MALE", na.rm = TRUE),
+      Female_n = sum(data$GENDER == "FEMALE", na.rm = TRUE),
+      Status = "Success"
+    )
+    
+    # Generate and save plot
+    plot <- create_boxplot(data, sheet_name)
+    ggsave(
+      file.path(output_folder, paste0(sheet_name, "_EIF2AK3_Boxplot.png")),
+      plot = plot,
+      width = 6,
+      height = 5,
+      dpi = 300
+    )
+    
+    message(paste("Processed", sheet_name, "successfully"))
+    
+  }, error = function(e) {
+    message(paste("Error in", sheet_name, ":", e$message))
+    all_results[[sheet_name]] <- data.frame(
+      Cancer_Type = sheet_name,
+      Status = paste("Error:", e$message)
+    )
+  })
+}
+
+# Save all results
+results_combined <- bind_rows(all_results)
+write_xlsx(list(Results = results_combined), 
+           file.path(output_folder, "T_test_results.xlsx"))
+write.csv(results_combined, 
+          file.path(output_folder, "T_test_results.csv"), 
+          row.names = FALSE)
+
+message("Analysis complete. Results saved to: ", output_folder)

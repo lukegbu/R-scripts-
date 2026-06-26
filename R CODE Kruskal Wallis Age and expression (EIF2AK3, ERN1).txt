@@ -1,0 +1,152 @@
+# Load required libraries
+library(readxl)
+library(dplyr)
+library(FSA)        # for Dunn's test
+library(ggplot2)
+library(writexl)    # for multi-sheet Excel output (no temp dir issues)
+library(scales)     # for y-axis formatting
+
+# ===== USER INPUT =====
+file_path <- "C:/Users/User/Desktop/Second manuscript/Demography/Demography.xlsx"
+output_folder <- "C:/Users/User/Desktop/Second manuscript/Demography/Kruskal_Dunn_Results_EIF2AK3_ERN1"
+
+# Create output folder if needed
+if (!dir.exists(output_folder)) {
+  dir.create(output_folder, recursive = TRUE)
+}
+
+# Sheets to process (only EIF2AK3 and ERN1)
+sheet_names <- c("EIF2AK3", "ERN1")
+
+# Age group breaks and labels (as you specified)
+age_breaks <- c(0, 30, 40, 50, 60, 70, 80, 101)
+age_labels <- c("0-29", "30-39", "40-49", "50-59", "60-69", "70-79", "80-100")
+
+# ===== DATA STORAGE =====
+all_results <- list()   # will hold data frames for each sheet (Kruskal + Dunn)
+
+# ===== PROCESS EACH SHEET =====
+for (sheet_name in sheet_names) {
+  try({
+    message("\n=== Processing sheet: ", sheet_name, " ===")
+    
+    # 1. Read data
+    data <- read_excel(file_path, sheet = sheet_name)
+    colnames(data) <- toupper(colnames(data))
+    
+    # The gene column name is exactly the sheet name (uppercase)
+    gene_col <- toupper(sheet_name)  # "EIF2AK3" or "ERN1"
+    
+    # Ensure required columns exist
+    if (!all(c("AGE", gene_col) %in% colnames(data))) {
+      warning("Skipping ", sheet_name, " – missing AGE or ", gene_col)
+      next
+    }
+    
+    # 2. Clean and convert
+    data <- data %>%
+      mutate(AGE = as.numeric(AGE),
+             !!gene_col := as.numeric(.data[[gene_col]])) %>%
+      filter(!is.na(AGE) & !is.na(.data[[gene_col]]))
+    
+    if (nrow(data) == 0) {
+      warning("Skipping ", sheet_name, " – no valid rows after cleaning")
+      next
+    }
+    
+    # 3. Create age groups
+    data <- data %>%
+      mutate(AGE_GROUP = cut(AGE, breaks = age_breaks, labels = age_labels, right = FALSE))
+    
+    # Remove any rows where AGE_GROUP is NA (if ages fall outside breaks)
+    data <- data %>% filter(!is.na(AGE_GROUP))
+    
+    # 4. Kruskal‑Wallis test
+    kruskal_result <- kruskal.test(data[[gene_col]] ~ data$AGE_GROUP)
+    message("Kruskal‑Wallis p‑value: ", kruskal_result$p.value)
+    
+    # Store Kruskal result
+    kruskal_df <- data.frame(
+      Sheet      = sheet_name,
+      Test       = "Kruskal-Wallis",
+      Statistic  = kruskal_result$statistic,
+      df         = kruskal_result$parameter,
+      p.value    = kruskal_result$p.value
+    )
+    all_results[[paste0(sheet_name, "_Kruskal")]] <- kruskal_df
+    
+    # 5. Dunn's post‑hoc test (even if Kruskal is not significant, we compute for completeness)
+    dunn_result <- dunnTest(data[[gene_col]] ~ data$AGE_GROUP, method = "bonferroni")
+    message("Dunn's test completed.")
+    
+    # 6. Calculate median expression per age group (add pseudocount 1 for LogFC)
+    age_medians <- data %>%
+      group_by(AGE_GROUP) %>%
+      summarise(Median_expr = median(.data[[gene_col]], na.rm = TRUE) + 1)
+    
+    # Add LogFC to Dunn's results
+    dunn_df <- dunn_result$res
+    dunn_df <- dunn_df %>%
+      separate(Comparison, into = c("Group1", "Group2"), sep = " - ") %>%
+      left_join(age_medians, by = c("Group1" = "AGE_GROUP")) %>%
+      rename(Median1 = Median_expr) %>%
+      left_join(age_medians, by = c("Group2" = "AGE_GROUP")) %>%
+      rename(Median2 = Median_expr) %>%
+      mutate(LogFC = log2(Median1 / Median2)) %>%
+      select(-Median1, -Median2) %>%
+      mutate(Sheet = sheet_name)
+    
+    all_results[[paste0(sheet_name, "_Dunn")]] <- dunn_df
+    
+    # 7. Boxplot with proper y-axis label using bquote()
+    y_min <- min(data[[gene_col]], na.rm = TRUE) - 0.5
+    y_max <- max(data[[gene_col]], na.rm = TRUE) + 0.5
+    y_limits <- c(floor(y_min), ceiling(y_max))
+    
+    p <- ggplot(data, aes(x = AGE_GROUP, y = .data[[gene_col]])) +
+      geom_boxplot(fill = NA, color = "black", size = 1.2, width = 0.5) +
+      stat_summary(
+        fun.data = function(y) {
+          return(data.frame(
+            y = max(y) + 0.1 * (max(y) - min(y)),
+            label = paste0("n=", length(y))
+          ))
+        },
+        geom = "text",
+        size = 8,
+        color = "black"
+      ) +
+      labs(
+        x = "Age Group",
+        y = bquote(italic(.(gene_col)) ~ "Log"[2] ~ "(RSEM+1)"),   # <-- FIXED label
+        title = paste(sheet_name, ":", gene_col, "Expression by Age Group")
+      ) +
+      theme_minimal() +
+      theme(
+        axis.text.x = element_text(angle = 0, hjust = 0.5, family = "Arial", size = 22, color = "black"),
+        axis.text.y = element_text(family = "Arial", size = 22, color = "black"),
+        axis.title.x = element_text(family = "Arial", size = 22, color = "black"),
+        axis.title.y = element_text(family = "Arial", size = 22, color = "black"),
+        plot.title = element_text(family = "Arial", size = 17, hjust = 0.5),
+        axis.line = element_line(color = "black", size = 1.2),
+        panel.grid = element_blank(),
+        axis.ticks = element_line(color = "black", size = 1.1),
+        axis.ticks.length = unit(0.6, "cm")
+      ) +
+      scale_y_continuous(limits = y_limits, 
+                         breaks = seq(y_limits[1], y_limits[2], by = 2), 
+                         labels = scales::number_format(accuracy = 0.1))
+    
+    # Print and save
+    print(p)
+    plot_file <- file.path(output_folder, paste0(sheet_name, "_", gene_col, "_Boxplot.png"))
+    ggsave(plot_file, plot = p, width = 8, height = 6)
+    message("Boxplot saved to: ", plot_file)
+    
+  }, silent = FALSE)  # print errors but continue to next sheet
+}
+
+# ===== SAVE ALL RESULTS TO EXCEL (using writexl) =====
+output_file <- file.path(output_folder, "Kruskal_Dunn_Results_EIF2AK3_ERN1.xlsx")
+write_xlsx(all_results, path = output_file)   # writes multiple sheets from a list
+message("\n✅ All results saved to: ", output_file)

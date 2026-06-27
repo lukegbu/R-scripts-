@@ -1,0 +1,135 @@
+# Load required libraries
+library(readxl)
+library(ggplot2)
+library(dplyr)
+library(writexl)
+
+# Define file path and filename - UPDATED FILENAME
+file_path <- "C:\\Users\\User\\Desktop\\cleaned data and R codes\\Processed data\\cell line data\\EIF2AK3_Batch_Corrected.xlsx"
+
+# Define sheet names (update this as necessary based on your Excel file)
+sheet_names <- excel_sheets(file_path)
+
+# --- MODIFICATION 1: Keep only sheets ATF6, GBM, and ERN1 ---
+sheet_names <- sheet_names[sheet_names %in% c("ATF6", "GBM", "ERN1")]
+
+# Initialize t_test_results list to store T-test results
+t_test_results <- list()
+
+# Initialize empty dataframe to combine data from all sheets
+combined_data <- data.frame()
+
+# Loop through each sheet, reshape data, perform T-test, and combine into one dataframe
+p_values <- c()  # Store raw p-values for Benjamini-Hochberg correction
+for (sheet in sheet_names) {
+  print(paste("Processing sheet:", sheet))
+  
+  # Read only relevant columns from the current sheet
+  data <- read_excel(file_path, sheet = sheet) %>%
+    dplyr::select(Sample, patientID, EIF2AK3_log2_corrected)  # UPDATED COLUMN NAME
+  
+  # Check if the necessary column exists and filter out missing values
+  if ("EIF2AK3_log2_corrected" %in% colnames(data)) {  # UPDATED COLUMN NAME
+    # Filter out any rows with missing expression values
+    data <- data %>%
+      filter(!is.na(EIF2AK3_log2_corrected))  # UPDATED COLUMN NAME
+    
+    
+    # Add the sheet name as a new column called "Primary_Tumor" to identify tumor types
+    data <- data %>%
+      mutate(Primary_Tumor = sheet)  # Add sheet name to identify tumor types
+    
+    # Print the first few rows of the data to verify
+    print(head(data))
+    
+    # Perform T-test between Tumor and Control groups
+    t_test_result <- t.test(EIF2AK3_log2_corrected ~ Sample, data = data)  # UPDATED COLUMN NAME
+    
+    # Store the raw p-value for Benjamini-Hochberg correction
+    p_values <- c(p_values, t_test_result$p.value)
+    
+    # Store the T-test result in the list
+    t_test_results[[sheet]] <- list(
+      "T-statistic" = t_test_result$statistic,
+      "P-value" = t_test_result$p.value,
+      "Mean (Control)" = t_test_result$estimate[1],
+      "Mean (Tumour)" = t_test_result$estimate[2]
+    )
+    
+    # Combine the current sheet's data into the main dataframe
+    combined_data <- bind_rows(combined_data, data)
+  } else {
+    print(paste("Skipping sheet:", sheet, "- 'EIF2AK3_log2_corrected' column not found"))  # UPDATED COLUMN NAME
+  }
+}
+
+# Check if combined_data is empty
+if (nrow(combined_data) == 0) {
+  stop("No data found in any sheet. Check the input Excel file and column names.")
+}
+
+# Apply Benjamini-Hochberg correction to the p-values
+p_values_corrected <- p.adjust(p_values, method = "BH")
+
+# Generate a combined box plot for all sheets combined
+plot <- ggplot(combined_data, aes(x = Primary_Tumor, y = EIF2AK3_log2_corrected, fill = Sample)) +  # UPDATED COLUMN NAME
+  geom_boxplot(outlier.shape = NA, width = 0.5, position = position_dodge(width = 0.75)) +
+  scale_fill_manual(values = c("Tumour" = "red", "Control" = "blue")) +
+  theme_minimal() +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        axis.line = element_line(colour = "black", linewidth = 1.2),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, color = "black", family = "Arial", size = 19),
+        axis.text.y = element_text(color = "black", family = "Arial", size = 19),
+        axis.title.x = element_text(color = "black", family = "Arial", size = 19),
+        axis.title.y = element_text(color = "black", family = "Arial", size = 19),
+        axis.ticks.y = element_line(color = "black", linewidth = 1.2),
+        axis.ticks.length.y = unit(0.6, "cm"),
+        axis.ticks.x = element_line(color = "black", linewidth = 1.2),
+        axis.ticks.length.x = unit(0.6, "cm"),
+        legend.text = element_text(color = "black", family = "Arial", size = 19),
+        legend.title = element_text(color = "black", family = "Arial", size = 19),
+        legend.position = "right") +
+  labs(x = "Primary Tumor", y = expression(italic(EIF2AK3)~"Log2(RSEM+1)")) +
+  ylim(0, NA) +
+  # --- MODIFICATION 2: Removed the dotted lines (geom_hline and geom_vline) ---
+  # geom_hline(yintercept = 6.15, linetype = "dotted", color = "black", linewidth = 0.7) +
+  # geom_vline(xintercept = 1:(length(unique(combined_data$Primary_Tumor)) - 1) + 0.5, 
+  #            linetype = "dotted", color = "black", linewidth = 0.7)
+  NULL
+
+# Add p-values to the plot
+label_y_position <- 7.5
+p_value_labels <- data.frame(
+  Primary_Tumor = names(t_test_results),
+  P_value = unlist(lapply(t_test_results, function(x) x$`P-value`)),
+  Adjusted_P_value = p_values_corrected
+)
+
+for (i in 1:nrow(p_value_labels)) {
+  tumor_type <- p_value_labels$Primary_Tumor[i]
+  p_value <- format(p_value_labels$Adjusted_P_value[i], scientific = TRUE, digits = 2)
+  plot <- plot + 
+    annotate("text", x = tumor_type, y = label_y_position, label = p_value, 
+             vjust = 1.0, hjust = 0.8, size = 7, angle = 90, color = "black", family = "Arial")
+}
+
+# --- MODIFICATION 3: Updated output plot filename ---
+output_plot_path <- paste0("C:\\Users\\User\\Desktop\\cleaned data and R codes\\Processed data\\cell line data\\ATF6_GBM_ERN1_combined_box_plot.jpg")
+ggsave(output_plot_path, plot, device = "jpeg", width = 17, height = 8)
+
+# Print the results of the T-tests after Benjamini-Hochberg correction
+t_test_results_df <- bind_rows(t_test_results, .id = "Sheet")
+t_test_results_df$`Adjusted P-value` <- p_values_corrected
+
+# Calculate Log2 Fold Change and Fold Change
+t_test_results_df$`Log2FC` <- t_test_results_df$`Mean (Tumour)` - t_test_results_df$`Mean (Control)`
+t_test_results_df$`Fold_Change` <- 2^t_test_results_df$Log2FC
+
+# --- MODIFICATION 4: Updated output Excel filename ---
+output_excel_path <- paste0("C:\\Users\\User\\Desktop\\cleaned data and R codes\\Processed data\\cell line data\\ATF6_GBM_ERN1_T_test_results.xlsx")
+write_xlsx(t_test_results_df, output_excel_path)
+
+print("Combined box plot with p-values and control legend saved.")
+print("T-test results with Benjamini-Hochberg correction, Log2FC, and Fold Change saved to Excel.")

@@ -1,27 +1,23 @@
-# Load necessary libraries
+
 library(readxl)
 library(dplyr)
 library(ggplot2)
 library(writexl)
 
-# Define the file path and output folder
 file_path <- "C:/Users/User/Desktop/cleaned data and R codes/Processed data/cell line data/Demography.xlsx"
 output_folder <- "C:/Users/User/Desktop/cleaned data and R codes/Processed data/cell line data/T-test_separated_box_plots"
 
-# Create output folder if it doesn't exist
 if (!dir.exists(output_folder)) {
   dir.create(output_folder, recursive = TRUE)
 }
 
-# Specify ALL sheet names (including ACC)
 sheet_names <- c("ACC", "CHOL", "GBM", "LGG", "LIHC", "LUSC", "LUAD", "STAD", "SKCM", 
                 "THYM", "PRAD", "READ", "TGCT", "BRCA", "UCEC",
                 "PCPG", "PAAD", "COAD", "THCA")
 
-# Initialize a list to store all T-test results
 all_results <- list()
 
-# Corrected function to create boxplots (fixed NA handling and syntax)
+
 create_boxplot <- function(data, sheet_name) {
   ggplot(data, aes(x = GENDER, y = EIF2AK3)) +
     geom_boxplot(fill = NA, color = "black", size = 1.2, width = 0.5, na.rm = TRUE) +
@@ -58,7 +54,7 @@ create_boxplot <- function(data, sheet_name) {
     )
 }
 
-# Process each sheet individually
+
 for (sheet_name in sheet_names) {
   tryCatch({
     # Read and clean data
@@ -69,7 +65,7 @@ for (sheet_name in sheet_names) {
       mutate(GENDER = toupper(GENDER)) %>%
       filter(GENDER %in% c("MALE", "FEMALE"))
     
-    # Skip if insufficient data
+    
     gender_counts <- table(data$GENDER)
     if (length(gender_counts) < 2 || any(gender_counts < 2)) {
       message(paste("Skipping", sheet_name, "- insufficient gender groups"))
@@ -80,10 +76,10 @@ for (sheet_name in sheet_names) {
       next
     }
     
-    # Perform T-test
+    
     t_test_result <- t.test(EIF2AK3 ~ GENDER, data = data)
     
-    # Store results
+   
     all_results[[sheet_name]] <- data.frame(
       Cancer_Type = sheet_name,
       Statistic = t_test_result$statistic,
@@ -96,7 +92,7 @@ for (sheet_name in sheet_names) {
       Status = "Success"
     )
     
-    # Generate and save plot
+    
     plot <- create_boxplot(data, sheet_name)
     ggsave(
       file.path(output_folder, paste0(sheet_name, "_EIF2AK3_Boxplot.png")),
@@ -117,7 +113,7 @@ for (sheet_name in sheet_names) {
   })
 }
 
-# Save all results
+
 results_combined <- bind_rows(all_results)
 write_xlsx(list(Results = results_combined), 
            file.path(output_folder, "T_test_results.xlsx"))

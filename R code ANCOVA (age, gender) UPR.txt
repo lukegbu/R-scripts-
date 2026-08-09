@@ -78,7 +78,7 @@ run_ancova <- function(sheet_name) {
   error_ms <- error_ss / error_df
   
   total_ss <- sum(anova_result[, "Sum Sq"])
-  total_df <- sum(anova_result[, "Df"])   # No +1 here, because sum already includes Residuals df
+  total_df <- sum(anova_result[, "Df"])   
   
  
   cat("\nANCOVA Table (Type II SS)\n")
@@ -112,7 +112,7 @@ run_ancova <- function(sheet_name) {
   cat("\n Results saved to:", out_file, "\n")
 }
 
-# Run for each sheet
+
 for (s in sheets) {
   run_ancova(s)
 }

@@ -109,7 +109,7 @@ run_ancova <- function(sheet_name) {
   
   out_file <- file.path(output_dir, paste0("ANCOVA_", sheet_name, ".csv"))
   write.csv(table_result, out_file, row.names = FALSE)
-  cat("\n✅ Results saved to:", out_file, "\n")
+  cat("\n Results saved to:", out_file, "\n")
 }
 
 # Run for each sheet
